@@ -8,7 +8,6 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-import java.io.FileOutputStream
 
 @Serializable
 data class GitHubAsset(
@@ -39,26 +38,46 @@ class ReleaseClient(
         }
     }
 
-    suspend fun download(url: String, target: File, onProgress: (Long, Long) -> Unit = { _, _ -> }) = withContext(Dispatchers.IO) {
+    /**
+     * Streams into a sibling `.part` and renames it into place, so an interrupted
+     * download is never installed as if it were complete.
+     */
+    suspend fun download(
+        url: String,
+        target: File,
+        expectedBytes: Long = 0L,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ) = withContext(Dispatchers.IO) {
         target.parentFile?.mkdirs()
+        val partial = File(target.parentFile, target.name + ".part")
         val req = Request.Builder().url(url).build()
-        http.newCall(req).execute().use { resp ->
-            check(resp.isSuccessful) { "Download ${resp.code}: ${resp.message}" }
-            val body = resp.body
-            val total = body.contentLength()
-            FileOutputStream(target).use { out ->
-                val buf = ByteArray(8192)
+        try {
+            http.newCall(req).execute().use { resp ->
+                check(resp.isSuccessful) { "Download ${resp.code}: ${resp.message}" }
+                val body = resp.body
+                val total = body.contentLength()
                 var readTotal = 0L
-                body.byteStream().use { input ->
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n <= 0) break
-                        out.write(buf, 0, n)
-                        readTotal += n
-                        onProgress(readTotal, total)
+                partial.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    body.byteStream().use { input ->
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n <= 0) break
+                            out.write(buf, 0, n)
+                            readTotal += n
+                            onProgress(readTotal, total)
+                        }
                     }
                 }
+                if (expectedBytes > 0 && readTotal != expectedBytes) {
+                    error("Incomplete download ($readTotal/$expectedBytes bytes)")
+                }
             }
+            if (target.exists()) target.delete()
+            check(partial.renameTo(target)) { "Could not place the download" }
+        } catch (t: Throwable) {
+            partial.delete()
+            throw t
         }
     }
 

@@ -105,7 +105,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ?: error("No matching asset for ABI ${binaries.deviceAbi()} in ${rel.tagName}; pick URL/import manually")
             _busy.value = "Downloading ${asset.name}"
             val tmp = File(getApplication<Application>().cacheDir, asset.name)
-            releases.download(asset.browserDownloadUrl, tmp)
+            releases.download(asset.browserDownloadUrl, tmp, expectedBytes = asset.size)
             val dst = binaries.installFromFile(tmp).getOrThrow()
             settings.setBinaryPath(dst.absolutePath)
             tmp.delete()
